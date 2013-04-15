@@ -704,6 +704,58 @@ static PyObject *bup_get_linux_file_attr(PyObject *self, PyObject *args)
 
 
 #ifdef BUP_HAVE_FILE_ATTRS
+unsigned long select_linux_file_attr(int test_fd, unsigned long orig_attr)
+{
+    static _Bool previously_run = 0;
+    static unsigned long settable_attr = 0;
+    int rc;
+
+    if (!previously_run)
+    {
+        // From the modifiable flags acdeijstuADSTC -- see chattr(1) and
+        // e2fsprogs source -- select those which are settable on the
+        // file system underlying test_fd.  Letter to flag mapping is in
+        // pf.c flags_array[].
+        struct named_flag {
+            unsigned long val;
+            char name;
+        } flags[] = {
+            {FS_APPEND_FL, 'a'},
+            {FS_COMPR_FL, 'c'},
+            {FS_NODUMP_FL, 'd'},
+            {FS_EXTENT_FL, 'e'},
+            {FS_IMMUTABLE_FL, 'i'},
+            {FS_JOURNAL_DATA_FL, 'j'},
+            {FS_SECRM_FL, 's'},
+            {FS_NOTAIL_FL, 't'},
+            {FS_UNRM_FL, 'u'},
+            {FS_NOATIME_FL, 'A'},
+            {FS_DIRSYNC_FL, 'D'},
+            {FS_SYNC_FL, 'S'},
+            {FS_TOPDIR_FL, 'T'},
+            {FS_NOCOW_FL, 'C'},
+            {0, 0}
+        };
+        
+        const struct named_flag *p;
+        for (p = flags; p->val != 0; ++p)
+        {
+            rc = ioctl(test_fd, FS_IOC_SETFLAGS, &p->val);
+            if (rc == -1)
+            {
+                // TODO issue a warning that p->name may not be restored
+            }
+            else settable_attr |= p->val;
+            rc = ioctl(test_fd, FS_IOC_SETFLAGS, &orig_attr);
+        }
+        previously_run = 1;
+    }
+    return settable_attr;
+}
+#endif /* def BUP_HAVE_FILE_ATTRS */
+
+
+#ifdef BUP_HAVE_FILE_ATTRS
 static PyObject *bup_set_linux_file_attr(PyObject *self, PyObject *args)
 {
     int rc;
@@ -718,14 +770,6 @@ static PyObject *bup_set_linux_file_attr(PyObject *self, PyObject *args)
     if (fd == -1)
         return PyErr_SetFromErrnoWithFilename(PyExc_OSError, path);
 
-    // Restrict attr to modifiable flags acdeijstuADST -- see
-    // chattr(1) and the e2fsprogs source.  Letter to flag mapping is
-    // in pf.c flags_array[].
-    attr &= FS_APPEND_FL | FS_COMPR_FL | FS_NODUMP_FL | FS_EXTENT_FL
-    | FS_IMMUTABLE_FL | FS_JOURNAL_DATA_FL | FS_SECRM_FL | FS_NOTAIL_FL
-    | FS_UNRM_FL | FS_NOATIME_FL | FS_DIRSYNC_FL | FS_SYNC_FL
-    | FS_TOPDIR_FL | FS_NOCOW_FL;
-
     // The extents flag can't be removed, so don't (see chattr(1) and chattr.c).
     rc = ioctl(fd, FS_IOC_GETFLAGS, &orig_attr);
     if (rc == -1)
@@ -733,6 +777,7 @@ static PyObject *bup_set_linux_file_attr(PyObject *self, PyObject *args)
         close(fd);
         return PyErr_SetFromErrnoWithFilename(PyExc_OSError, path);
     }
+    attr &= select_linux_file_attr(fd, orig_attr);
     attr |= (orig_attr & FS_EXTENT_FL);
 
     rc = ioctl(fd, FS_IOC_SETFLAGS, &attr);
