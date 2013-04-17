@@ -15,7 +15,7 @@ def cp():
     """Create a git.CatPipe object or reuse the already existing one."""
     global _cp
     if not _cp:
-        _cp = git.CatPipe()
+        _cp = git.CatFile()
     return _cp
 
 class NodeError(Exception):

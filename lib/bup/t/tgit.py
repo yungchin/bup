@@ -1,4 +1,4 @@
-import struct, os, tempfile, time
+import struct, os, tempfile, time, StringIO
 from bup import git
 from bup.helpers import *
 from wvtest import *
@@ -37,15 +37,25 @@ def testencode():
     looseb = ''.join(git._encode_looseobj('blob', s))
     looset = ''.join(git._encode_looseobj('tree', s))
     loosec = ''.join(git._encode_looseobj('commit', s))
-    packb = ''.join(git._encode_packobj('blob', s))
-    packt = ''.join(git._encode_packobj('tree', s))
-    packc = ''.join(git._encode_packobj('commit', s))
+    f = StringIO.StringIO()
+    offs_b = f.tell()
+    f.write(''.join(git._encode_packobj('blob', s)))
+    offs_t = f.tell()
+    f.write(''.join(git._encode_packobj('tree', s)))
+    offs_c = f.tell()
+    f.write(''.join(git._encode_packobj('commit', s)))
+
     WVPASSEQ(git._decode_looseobj(looseb), ('blob', s))
     WVPASSEQ(git._decode_looseobj(looset), ('tree', s))
     WVPASSEQ(git._decode_looseobj(loosec), ('commit', s))
-    WVPASSEQ(git._decode_packobj(packb), ('blob', s))
-    WVPASSEQ(git._decode_packobj(packt), ('tree', s))
-    WVPASSEQ(git._decode_packobj(packc), ('commit', s))
+    
+    def test_decode_packobj(offset, type):
+        it = git._decode_packobj(f, offset)
+        WVPASSEQ(it.next(), type)
+        WVPASSEQ(''.join(it), s)
+    test_decode_packobj(offs_c, 'commit')
+    test_decode_packobj(offs_t, 'tree')
+    test_decode_packobj(offs_b, 'blob')
 
 
 @wvtest

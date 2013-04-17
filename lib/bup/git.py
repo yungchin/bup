@@ -207,21 +207,24 @@ def _decode_looseobj(buf):
     return (type, content)
 
 
-def _decode_packobj(buf):
-    assert(buf)
-    c = ord(buf[0])
+def _decode_packobj(f, offset):
+    f.seek(offset)
+    c = ord(f.read(1))
     type = _typermap[(c & 0x70) >> 4]
+    yield type
     sz = c & 0x0f
     shift = 4
     i = 0
     while c & 0x80:
         i += 1
-        c = ord(buf[i])
+        c = ord(f.read(1))
         sz |= (c & 0x7f) << shift
         shift += 7
-        if not (c & 0x80):
-            break
-    return (type, zlib.decompress(buf[i+1:]))
+    z = zlib.decompressobj()
+    for b in chunkyreader(f):
+        yield z.decompress(b)
+        if len(z.unused_data): break
+    yield z.flush()
 
 
 class PackIdx:
@@ -1040,6 +1043,45 @@ class CatPipe:
                 yield d
         except StopIteration:
             log('booger!\n')
+
+class CatFile(CatPipe):
+    """Retrieve blob data using PackIdxList. Fall back to CatPipe when needed.
+    """
+    def __init__(self):
+        CatPipe.__init__(self)
+        self._get_fallback = self.get
+        self.get = self._get
+        self.objcache = _make_objcache()
+        self.fd_cache = {}
+
+    def _get(self, id):
+        try:
+            fallback_possible = True
+            sha = id.decode('hex') # we'll rely on fallback when id[-1]==':'
+            idx_name = self.objcache.exists(sha, want_source=True)
+            if not idx_name:
+                raise KeyError('blob %r is missing' % id)
+            idx, pack = self._file_cache(idx_name)
+            # note _decode_packobj may raise KeyError eg for deltified objects
+            for b in _decode_packobj(pack, idx.find_offset(sha)):
+                # TODO verify sha1sum of decoded object
+                fallback_possible = False
+                yield b
+        except Exception, e:
+            if not fallback_possible: raise
+            else: debug1('Using _get_fallback: %s' % e)
+            for b in self._get_fallback(id):
+                yield b
+
+    def _file_cache(self, idx_name):
+        # TODO limit number of open files, cf midx-cmd.py
+        if idx_name not in self.fd_cache:
+            assert(idx_name.endswith('.idx'))
+            full = os.path.join(self.objcache.dir, idx_name)
+            idx = open_idx(full)
+            pack = open(full[:-4] + '.pack', 'rb')
+            self.fd_cache[idx_name] = (idx, pack)
+        return self.fd_cache[idx_name]
 
 def tags():
     """Return a dictionary of all tags in the form {hash: [tag_names, ...]}."""
