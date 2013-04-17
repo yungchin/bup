@@ -330,7 +330,7 @@ class PackIdxV2(PackIdx):
 
 _mpi_count = 0
 class PackIdxList:
-    def __init__(self, dir):
+    def __init__(self, dir, skip_midx=False, skip_bloom=False):
         global _mpi_count
         assert(_mpi_count == 0) # these things suck tons of VM; don't waste it
         _mpi_count += 1
@@ -339,7 +339,7 @@ class PackIdxList:
         self.packs = []
         self.do_bloom = False
         self.bloom = None
-        self.refresh()
+        self.refresh(skip_midx, skip_bloom)
 
     def __del__(self):
         global _mpi_count
@@ -375,7 +375,7 @@ class PackIdxList:
         self.do_bloom = True
         return None
 
-    def refresh(self, skip_midx = False):
+    def refresh(self, skip_midx=False, skip_bloom=False):
         """Refresh the index list.
         This method verifies if .midx files were superseded (e.g. all of its
         contents are in another, bigger .midx file) and removes the superseded
@@ -440,9 +440,10 @@ class PackIdxList:
                         add_error(e)
                         continue
                     d[full] = ix
-            bfull = os.path.join(self.dir, 'bup.bloom')
-            if self.bloom is None and os.path.exists(bfull):
-                self.bloom = bloom.ShaBloom(bfull)
+            if not skip_bloom:
+                bfull = os.path.join(self.dir, 'bup.bloom')
+                if self.bloom is None and os.path.exists(bfull):
+                    self.bloom = bloom.ShaBloom(bfull)
             self.packs = list(set(d.values()))
             self.packs.sort(lambda x,y: -cmp(len(x),len(y)))
             if self.bloom and self.bloom.valid() and len(self.bloom) >= len(self):
@@ -1051,7 +1052,8 @@ class CatFile(CatPipe):
         CatPipe.__init__(self)
         self._get_fallback = self.get
         self.get = self._get
-        self.objcache = _make_objcache()
+        self.objcache = PackIdxList(repo('objects/pack'), skip_midx=True,
+                                                          skip_bloom=True)
         self.fd_cache = {}
 
     def _get(self, id):
