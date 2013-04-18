@@ -49,14 +49,19 @@ def testencode():
     WVPASSEQ(git._decode_looseobj(looset), ('tree', s))
     WVPASSEQ(git._decode_looseobj(loosec), ('commit', s))
     
-    def test_decode_packobj(offset, type):
-        it = git._decode_packobj(f, offset)
+    def test_decode_packobj(offset, type, verify_sha=None):
+        it = git._decode_packobj(f, offset, verify_sha)
         WVPASSEQ(it.next(), type)
         WVPASSEQ(''.join(it), s)
     test_decode_packobj(offs_c, 'commit')
     test_decode_packobj(offs_t, 'tree')
     test_decode_packobj(offs_b, 'blob')
+    test_decode_packobj(offs_c, 'commit', git.calc_hash('commit', s))
 
+    def test_verify_sha():
+        return ''.join(git._decode_packobj(f, offs_t,
+                                           verify_sha=Sha1('').digest()))
+    WVEXCEPT(git.GitError, test_verify_sha)
 
 @wvtest
 def testpacks():

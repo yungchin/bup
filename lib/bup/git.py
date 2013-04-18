@@ -207,7 +207,7 @@ def _decode_looseobj(buf):
     return (type, content)
 
 
-def _decode_packobj(f, offset=None):
+def _decode_packobj(f, offset=None, verify_sha=None):
     if offset is not None:
         f.seek(offset)
     c = ord(f.read(1))
@@ -221,11 +221,23 @@ def _decode_packobj(f, offset=None):
         c = ord(f.read(1))
         sz |= (c & 0x7f) << shift
         shift += 7
+    if verify_sha:
+        sum_header = '%s %d\0' % (type, sz)
+        sum = Sha1(sum_header)
     z = zlib.decompressobj()
     for b in chunkyreader(f):
-        yield z.decompress(b)
+        b = z.decompress(b)
+        if verify_sha: sum.update(b)
+        yield b
         if len(z.unused_data): break
-    yield z.flush()
+    b = z.flush()
+    if verify_sha:
+        sum.update(b)
+        dig = sum.digest()
+        if dig != verify_sha:
+            raise GitError('hash %s failed verification %s'
+                           % (verify_sha.encode('hex'), dig.encode('hex')))
+    yield b
 
 
 class PackIdx:
@@ -1086,11 +1098,11 @@ class CatFile(CatPipe):
             fallback_possible = True
             sha = id.decode('hex') # we'll rely on fallback when id[-1]==':'
             f = self.objcache.find_obj(sha)
-            if f is None:
-                raise KeyError('blob %r is missing' % id)
+            if f is None: # could be loose object
+                raise KeyError('blob %r not in any pack' % id)
             # note _decode_packobj may raise KeyError eg for deltified objects
-            for b in _decode_packobj(f):
-                # TODO verify sha1sum of decoded object
+            # TODO test that fallback works for deltified objects
+            for b in _decode_packobj(f, verify_sha=sha):
                 fallback_possible = False
                 yield b
         except Exception, e:
