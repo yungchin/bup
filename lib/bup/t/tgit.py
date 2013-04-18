@@ -44,6 +44,7 @@ def testencode():
     f.write(''.join(git._encode_packobj('tree', s)))
     offs_c = f.tell()
     f.write(''.join(git._encode_packobj('commit', s)))
+    f.write('footer') # _decode_packobj() expects some kind of footer
 
     WVPASSEQ(git._decode_looseobj(looseb), ('blob', s))
     WVPASSEQ(git._decode_looseobj(looset), ('tree', s))

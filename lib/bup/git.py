@@ -225,11 +225,11 @@ def _decode_packobj(f, offset=None, verify_sha=None):
         sum_header = '%s %d\0' % (type, sz)
         sum = Sha1(sum_header)
     z = zlib.decompressobj()
-    for b in chunkyreader(f):
-        b = z.decompress(b)
+    while not z.unused_data:
+        # compressed, hashsplitted chunks will mostly be smaller than 8kB
+        b = z.decompress(f.read(8192))
         if verify_sha: sum.update(b)
         yield b
-        if len(z.unused_data): break
     b = z.flush()
     if verify_sha:
         sum.update(b)
