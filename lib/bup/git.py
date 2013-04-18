@@ -207,8 +207,9 @@ def _decode_looseobj(buf):
     return (type, content)
 
 
-def _decode_packobj(f, offset):
-    f.seek(offset)
+def _decode_packobj(f, offset=None):
+    if offset is not None:
+        f.seek(offset)
     c = ord(f.read(1))
     type = _typermap[(c & 0x70) >> 4]
     yield type
@@ -457,6 +458,32 @@ class PackIdxList:
         """Insert an additional object in the list."""
         self.also.add(hash)
 
+class PackIdxListPlus(PackIdxList):
+    """ Variation on PackIdxList optimised for existing object retrieval"""
+    max_recent = 10 # magic number of sorts; TODO optimise
+
+    def __init__(self, dir, skip_midx=False, skip_bloom=True):
+        PackIdxList.__init__(self, dir, skip_midx, skip_bloom)
+        self.recent = []
+
+    def find_obj(self, hash):
+        """ Return an open pack file at the right offset to read object"""
+        for i in xrange(len(self.recent)):
+            idx = self.recent[i]
+            ofs = idx.find_offset(hash)
+            if ofs is not None:
+                self.recent = [idx] + self.recent[:i] + self.recent[i+1:]
+                idx.packfile.seek(ofs)
+                return idx.packfile
+        name = self.exists(hash, want_source=True)
+        if name is None:
+            return None
+        assert(name.endswith('.idx'))
+        full = os.path.join(self.dir, name)
+        idx = open_idx(full)
+        idx.packfile = open(full[:-4] + '.pack', 'rb')
+        self.recent = [idx] + self.recent[:self.max_recent]
+        return self.find_obj(hash)
 
 def open_idx(filename):
     if filename.endswith('.idx'):
@@ -1052,20 +1079,17 @@ class CatFile(CatPipe):
         CatPipe.__init__(self)
         self._get_fallback = self.get
         self.get = self._get
-        self.objcache = PackIdxList(repo('objects/pack'), skip_midx=True,
-                                                          skip_bloom=True)
-        self.fd_cache = {}
+        self.objcache = PackIdxListPlus(repo('objects/pack'))
 
     def _get(self, id):
         try:
             fallback_possible = True
             sha = id.decode('hex') # we'll rely on fallback when id[-1]==':'
-            idx_name = self.objcache.exists(sha, want_source=True)
-            if not idx_name:
+            f = self.objcache.find_obj(sha)
+            if f is None:
                 raise KeyError('blob %r is missing' % id)
-            idx, pack = self._file_cache(idx_name)
             # note _decode_packobj may raise KeyError eg for deltified objects
-            for b in _decode_packobj(pack, idx.find_offset(sha)):
+            for b in _decode_packobj(f):
                 # TODO verify sha1sum of decoded object
                 fallback_possible = False
                 yield b
@@ -1074,16 +1098,6 @@ class CatFile(CatPipe):
             else: debug1('Using _get_fallback: %s' % e)
             for b in self._get_fallback(id):
                 yield b
-
-    def _file_cache(self, idx_name):
-        # TODO limit number of open files, cf midx-cmd.py
-        if idx_name not in self.fd_cache:
-            assert(idx_name.endswith('.idx'))
-            full = os.path.join(self.objcache.dir, idx_name)
-            idx = open_idx(full)
-            pack = open(full[:-4] + '.pack', 'rb')
-            self.fd_cache[idx_name] = (idx, pack)
-        return self.fd_cache[idx_name]
 
 def tags():
     """Return a dictionary of all tags in the form {hash: [tag_names, ...]}."""
