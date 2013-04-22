@@ -183,7 +183,7 @@ def test_check_repo_or_die():
 
 
 @wvtest
-def test_list_refs():
+def test_list_refs_and_rev_list():
     # We can use the git repo that we're building bup from for testing: it
     # should contain examples of all the tricky bits, such as signed tags, a
     # packed-refs file, etc. 
@@ -208,5 +208,11 @@ def test_list_refs():
                 (sha, name) = d.split(' ', 1)
                 yield (name, sha.decode('hex'))
 
-    WVPASSEQ([n for n in list_refs()], [m for m in git.list_refs()])
-    WVPASSEQ([n for n in list_refs('bup-0.15b')], [m for m in git.list_refs('bup-0.15b')])
+    WVPASSEQ(list(list_refs()), list(git.list_refs()))
+    WVPASSEQ(list(list_refs('bup-0.15b')), list(git.list_refs('bup-0.15b')))
+    
+    cf = git.CatFile()
+    for name, sha in list_refs():
+        ref = sha.encode('hex')
+        WVPASSEQ(list(git.rev_list(ref, catfile=cf)), list(git.rev_list(ref)))
+        WVPASSEQ(list(git.rev_list(ref, 10, cf)), list(git.rev_list(ref, 10)))

@@ -775,7 +775,7 @@ def read_ref(refname):
         return None
 
 
-def rev_list(ref, count=None):
+def rev_list(ref, count=None, catfile=None):
     """Generate a list of reachable commits in reverse chronological order.
 
     This generator walks through commits, from child to parent, that are
@@ -783,9 +783,53 @@ def rev_list(ref, count=None):
     (date,hash).
 
     If count is a non-zero integer, limit the number of commits to "count"
-    objects.
+    objects.  If catfile is an instance of CatFile, rev_list() can use it to
+    gain a performance advantage on large repositories.
     """
     assert(not ref.startswith('-'))
+    if isinstance(catfile, CatFile):
+        re_date = re.compile(r'^committer .+ ([0-9]+) [+\-]?[0-9]{4}$')
+
+        if re.match(r'^[0-9a-f]{40}$', ref) is None:
+            name, sha = list_refs(ref)
+            ref = sha.encode('hex')
+        i = 0
+        while ref is not None and (count is None or i < count):
+            it = catfile.get(ref)
+            type = it.next()
+            obj = ''.join(it)
+            parent = None
+            for line in obj.split('\n'):
+                if type == 'tag':
+                    if line.startswith('object '):
+                        parent = line[7:]
+                        break
+                elif type == 'commit':
+                    if line.startswith('parent '):
+                        if parent is not None:
+                            # Merged!!  Pfff, let's just use the fallback:
+                            for i in _rev_list(ref, count and count-i):
+                                yield i
+                            parent = None
+                            break
+                        parent = line[7:]
+                        assert(len(parent) == 40)
+                    elif line.startswith('committer '):
+                        date = int(re_date.search(line).group(1))
+                        yield (date, ref.decode('hex'))
+                        i += 1
+                        break
+                else:
+                    debug1('ignoring type %s in rev_list' % type)
+                    break
+            ref = parent
+    else: 
+        for i in _rev_list(ref, count):
+            yield i
+
+
+def _rev_list(ref, count=None):
+    debug1('falling back on _rev_list()')
     opts = []
     if count:
         opts += ['-n', str(atoi(count))]
@@ -804,9 +848,9 @@ def rev_list(ref, count=None):
         raise GitError, 'git rev-list returned error %d' % rv
 
 
-def rev_get_date(ref):
+def rev_get_date(ref, catfile=None):
     """Get the date of the latest commit on the specified ref."""
-    for (date, commit) in rev_list(ref, count=1):
+    for (date, commit) in rev_list(ref, count=1, catfile=catfile):
         return date
     raise GitError, 'no such commit %r' % ref
 

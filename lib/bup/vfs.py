@@ -463,7 +463,7 @@ class CommitDir(Node):
         refs = git.list_refs()
         for ref in refs:
             #debug2('ref name: %s\n' % ref[0])
-            revs = git.rev_list(ref[1].encode('hex'))
+            revs = git.rev_list(ref[1].encode('hex'), catfile=cp())
             for (date, commit) in revs:
                 #debug2('commit: %s  date: %s\n' % (commit.encode('hex'), date))
                 commithex = commit.encode('hex')
@@ -505,7 +505,7 @@ class TagDir(Node):
         for (name, sha) in git.list_refs():
             if name.startswith('refs/tags/'):
                 name = name[10:]
-                date = git.rev_get_date(sha.encode('hex'))
+                date = git.rev_get_date(sha.encode('hex'), catfile=cp())
                 commithex = sha.encode('hex')
                 target = '../.commit/%s/%s' % (commithex[:2], commithex[2:])
                 tag1 = FakeSymlink(self, name, target)
@@ -527,7 +527,7 @@ class BranchList(Node):
 
         tags = git.tags()
 
-        revs = list(git.rev_list(self.hash.encode('hex')))
+        revs = list(git.rev_list(self.hash.encode('hex'), catfile=cp()))
         latest = revs[0]
         for (date, commit) in revs:
             l = time.localtime(date)
@@ -575,7 +575,7 @@ class RefList(Node):
         for (name,sha) in git.list_refs():
             if name.startswith('refs/heads/'):
                 name = name[11:]
-                date = git.rev_get_date(sha.encode('hex'))
+                date = git.rev_get_date(sha.encode('hex'), catfile=cp())
                 n1 = BranchList(self, name, sha)
                 n1.ctime = n1.mtime = date
                 self._subs[name] = n1
