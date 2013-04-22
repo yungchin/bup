@@ -739,20 +739,30 @@ def _gitenv():
 
 def list_refs(refname = None):
     """Generate a list of tuples in the form (refname,hash).
-    If a ref name is specified, list only this particular ref.
+    If a ref name is specified, list only matching refs.
     """
-    argv = ['git', 'show-ref', '--']
-    if refname:
-        argv += [refname]
-    p = subprocess.Popen(argv, preexec_fn = _gitenv, stdout = subprocess.PIPE)
-    out = p.stdout.read().strip()
-    rv = p.wait()  # not fatal
-    if rv:
-        assert(not out)
-    if out:
-        for d in out.split('\n'):
-            (sha, name) = d.split(' ', 1)
-            yield (name, sha.decode('hex'))
+    d = dict()
+    strip_prefix = repo('')
+    for root, subs, files in os.walk(repo('refs')):
+        for f in files:
+            name = os.path.join(root, f)
+            id = open(name, 'r').readline().strip()
+            d[os.path.relpath(name, strip_prefix)] = id
+    if os.path.exists(repo('packed-refs')):
+        for line in open(repo('packed-refs'), 'r').readlines():
+            if (line[0] != '^' # additional line that appears for signed tags
+                and line[0] != '#'): # comment line
+                id, name = line.strip().split(None, 1)
+                if name not in d: # unpacked refs take precedence
+                    d[name] = id
+    for name, id in d.items():
+        if id.startswith('ref: '): # would appear in a HEAD
+            d[name] = d[id.split()[1]]
+    l = sorted((name, id.decode('hex')) for name, id in d.items())
+    for name, sha in l:
+        if (refname is None or name == refname
+                            or os.path.basename(name) == refname):
+            yield name, sha
 
 
 def read_ref(refname):

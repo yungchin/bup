@@ -180,3 +180,33 @@ def test_check_repo_or_die():
         WVPASSEQ(e.code, 15)
     else:
         WVFAIL()
+
+
+@wvtest
+def test_list_refs():
+    # We can use the git repo that we're building bup from for testing: it
+    # should contain examples of all the tricky bits, such as signed tags, a
+    # packed-refs file, etc. 
+    os.environ['GIT_DIR'] = os.environ['BUP_DIR'] = bupdir = '../../../.git/'
+    git.check_repo_or_die(bupdir)
+
+    # The following was the original implementation of list_refs():
+    def list_refs(refname = None):
+        """Generate a list of tuples in the form (refname,hash).
+        If a ref name is specified, list only this particular ref.
+        """
+        argv = ['git', 'show-ref', '--']
+        if refname:
+            argv += [refname]
+        p = subprocess.Popen(argv, stdout = subprocess.PIPE)
+        out = p.stdout.read().strip()
+        rv = p.wait()  # not fatal
+        if rv:
+            assert(not out)
+        if out:
+            for d in out.split('\n'):
+                (sha, name) = d.split(' ', 1)
+                yield (name, sha.decode('hex'))
+
+    WVPASSEQ([n for n in list_refs()], [m for m in git.list_refs()])
+    WVPASSEQ([n for n in list_refs('bup-0.15b')], [m for m in git.list_refs('bup-0.15b')])
