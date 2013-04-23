@@ -1150,7 +1150,16 @@ class CatFile(CatPipe):
     def _get(self, id):
         try:
             fallback_possible = True
-            sha = id.decode('hex') # we'll rely on fallback when id[-1]==':'
+            if id.endswith(':'): # find tree from commit id
+                it = self._get(id[:-1])
+                type = it.next()
+                assert(type == 'commit')
+                for line in ''.join(it).readlines():
+                    m = re.match(r'^tree\s+([0-9a-f]{40})$', line)
+                    if m is not None:
+                        sha = m.group(1)
+                        break
+            sha = id.decode('hex')
             f = self.objcache.find_obj(sha)
             if f is None: # could be loose object
                 raise KeyError('blob %r not in any pack' % id)
