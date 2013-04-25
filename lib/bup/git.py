@@ -2,7 +2,7 @@
 bup repositories are in Git format. This library allows us to
 interact with the Git data structures.
 """
-import os, sys, zlib, time, subprocess, struct, stat, re, tempfile, glob
+import os, sys, zlib, time, subprocess, struct, stat, re, tempfile, glob, resource
 from bup.helpers import *
 from bup import _helpers, path, midx, bloom, xstat
 
@@ -352,10 +352,14 @@ class PackIdxList:
         self.packs = []
         self.do_bloom = False
         self.bloom = None
-        self.recent = [] # This caches idx-files that have had hits recently;
-                         # assuming that consecutive searches are correlated,
-                         # we will search these before resorting to self.packs
-        self.max_recent = 10
+        # self.recent caches idx-files that have had hits recently; assuming
+        # that consecutive searches are correlated, we will search these before
+        # resorting to self.packs:
+        self.recent = []
+        self.max_recent = 0
+        self.recent_perf = {'prev_avg': 0., 'prev_change': -1,
+                            'time': 0, 'calls': 0}
+        self.recent_misses = 0
         self.refresh()
 
     def __del__(self):
@@ -370,12 +374,38 @@ class PackIdxList:
         return sum(len(pack) for pack in self.packs)
 
     def _insert_recent(self, idx_name):
-        assert(idx_name.endswith('.idx'))
-        full = os.path.join(self.dir, idx_name)
-        idx = open_idx(full)
-        idx.packfile = full[:-4] + '.pack' # may turn into file object later
-        self.recent = [idx] + self.recent[:self.max_recent]
+        if self.max_recent != 0:
+            assert(idx_name.endswith('.idx'))
+            full = os.path.join(self.dir, idx_name)
+            idx = open_idx(full)
+            idx.packfile = full[:-4] + '.pack' # may turn into file object later
+            self.recent = [idx] + self.recent[:self.max_recent]
 
+    def _perf(func):
+        """Adjust self.max_recent based on wall-clock performance of lookups."""
+        def wrapper(self, *args, **kwargs):
+            p = self.recent_perf # copy so nested func() won't count twice
+            t0 = time.time()
+            ret = func(self, *args, **kwargs)
+            p['time'] += time.time() - t0
+            p['calls'] += 1
+            if self.recent_misses > 10: # frequent misses, frequent adjustments
+                avg = p['time'] / p['calls']
+                slope = (avg - p['prev_avg']) / p['prev_change']
+                maxopen = min(resource.getrlimit(resource.RLIMIT_NOFILE)) // 4
+                total = len(glob.glob(os.path.join(self.dir, '*.idx')))
+                change = 1 if ((slope < 0 or self.max_recent == 0) and
+                               self.max_recent != min(total, maxopen)) else -1
+                self.max_recent += change
+                debug1('_perf: adjusted max_recent to %r.\n' % self.max_recent)
+                p = {'prev_avg': avg, 'prev_change': change,
+                     'time': 0, 'calls': 0}
+                self.recent_misses = 0
+            self.recent_perf = p
+            return ret
+        return wrapper
+
+    @_perf
     def exists(self, hash, want_source=False, skip_recent=False):
         """Return nonempty if the object exists in the index files."""
         global _total_searches
@@ -395,6 +425,7 @@ class PackIdxList:
                 if ix is not None:
                     self.recent = [p] + self.recent[:i] + self.recent[i+1:]
                     return ix
+            self.recent_misses += 1
         for i in xrange(len(self.packs)):
             p = self.packs[i]
             _total_searches -= 1  # will be incremented by sub-pack
@@ -407,6 +438,7 @@ class PackIdxList:
         self.do_bloom = True
         return None
 
+    @_perf
     def find_obj(self, hash):
         """ Return an open pack file at the right offset to read object"""
         for i in xrange(len(self.recent)):
@@ -418,6 +450,8 @@ class PackIdxList:
                     idx.packfile = open(idx.packfile, 'rb')
                 idx.packfile.seek(ofs)
                 return idx.packfile
+        self.recent_misses += 1
+        if self.max_recent == 0: self.max_recent = 1
         name = self.exists(hash, skip_recent=True)
         # recent[0] should now contain the right idx
         return self.find_obj(hash) if name is not None else None
