@@ -352,6 +352,10 @@ class PackIdxList:
         self.packs = []
         self.do_bloom = False
         self.bloom = None
+        self.recent = [] # This caches idx-files that have had hits recently;
+                         # assuming that consecutive searches are correlated,
+                         # we will search these before resorting to self.packs
+        self.max_recent = 10
         self.refresh()
 
     def __del__(self):
@@ -365,7 +369,14 @@ class PackIdxList:
     def __len__(self):
         return sum(len(pack) for pack in self.packs)
 
-    def exists(self, hash, want_source=False):
+    def _insert_recent(self, idx_name):
+        assert(idx_name.endswith('.idx'))
+        full = os.path.join(self.dir, idx_name)
+        idx = open_idx(full)
+        idx.packfile = full[:-4] + '.pack' # may turn into file object later
+        self.recent = [idx] + self.recent[:self.max_recent]
+
+    def exists(self, hash, want_source=False, skip_recent=False):
         """Return nonempty if the object exists in the index files."""
         global _total_searches
         _total_searches += 1
@@ -377,16 +388,39 @@ class PackIdxList:
             else:
                 _total_searches -= 1  # was counted by bloom
                 return None
+        if not skip_recent:
+            for i in xrange(len(self.recent)):
+                p = self.recent[i]
+                ix = p.exists(hash, want_source=want_source)
+                if ix is not None:
+                    self.recent = [p] + self.recent[:i] + self.recent[i+1:]
+                    return ix
         for i in xrange(len(self.packs)):
             p = self.packs[i]
             _total_searches -= 1  # will be incremented by sub-pack
-            ix = p.exists(hash, want_source=want_source)
+            ix = p.exists(hash, want_source=True)
             if ix:
                 # reorder so most recently used packs are searched first
                 self.packs = [p] + self.packs[:i] + self.packs[i+1:]
+                self._insert_recent(ix)
                 return ix
         self.do_bloom = True
         return None
+
+    def find_obj(self, hash):
+        """ Return an open pack file at the right offset to read object"""
+        for i in xrange(len(self.recent)):
+            idx = self.recent[i]
+            ofs = idx.find_offset(hash)
+            if ofs is not None:
+                self.recent = [idx] + self.recent[:i] + self.recent[i+1:]
+                if isinstance(idx.packfile, str):
+                    idx.packfile = open(idx.packfile, 'rb')
+                idx.packfile.seek(ofs)
+                return idx.packfile
+        name = self.exists(hash, skip_recent=True)
+        # recent[0] should now contain the right idx
+        return self.find_obj(hash) if name is not None else None
 
     def refresh(self, skip_midx = False):
         """Refresh the index list.
@@ -469,32 +503,6 @@ class PackIdxList:
         """Insert an additional object in the list."""
         self.also.add(hash)
 
-class PackIdxListPlus(PackIdxList):
-    """ Variation on PackIdxList optimised for existing object retrieval"""
-    max_recent = 10 # magic number of sorts; TODO optimise
-
-    def __init__(self, dir):
-        PackIdxList.__init__(self, dir)
-        self.recent = []
-
-    def find_obj(self, hash):
-        """ Return an open pack file at the right offset to read object"""
-        for i in xrange(len(self.recent)):
-            idx = self.recent[i]
-            ofs = idx.find_offset(hash)
-            if ofs is not None:
-                self.recent = [idx] + self.recent[:i] + self.recent[i+1:]
-                idx.packfile.seek(ofs)
-                return idx.packfile
-        name = self.exists(hash, want_source=True)
-        if name is None:
-            return None
-        assert(name.endswith('.idx'))
-        full = os.path.join(self.dir, name)
-        idx = open_idx(full)
-        idx.packfile = open(full[:-4] + '.pack', 'rb')
-        self.recent = [idx] + self.recent[:self.max_recent]
-        return self.find_obj(hash)
 
 def open_idx(filename):
     if filename.endswith('.idx'):
@@ -1144,7 +1152,7 @@ class CatFile(CatPipe):
         CatPipe.__init__(self)
         self._get_fallback = self.get
         self.get = self._get
-        self.objcache = PackIdxListPlus(repo('objects/pack'))
+        self.objcache = _make_objcache()
 
     def _get(self, id):
         try:
@@ -1169,7 +1177,7 @@ class CatFile(CatPipe):
                 yield b
         except Exception, e:
             if not fallback_possible: raise
-            else: debug1('Using _get_fallback: %s' % e)
+            else: debug1('Using _get_fallback: %s\n' % e)
             for b in self._get_fallback(id):
                 yield b
 
