@@ -343,7 +343,7 @@ class PackIdxV2(PackIdx):
 
 _mpi_count = 0
 class PackIdxList:
-    def __init__(self, dir, skip_midx=False, skip_bloom=False):
+    def __init__(self, dir):
         global _mpi_count
         assert(_mpi_count == 0) # these things suck tons of VM; don't waste it
         _mpi_count += 1
@@ -352,7 +352,7 @@ class PackIdxList:
         self.packs = []
         self.do_bloom = False
         self.bloom = None
-        self.refresh(skip_midx, skip_bloom)
+        self.refresh()
 
     def __del__(self):
         global _mpi_count
@@ -388,7 +388,7 @@ class PackIdxList:
         self.do_bloom = True
         return None
 
-    def refresh(self, skip_midx=False, skip_bloom=False):
+    def refresh(self, skip_midx = False):
         """Refresh the index list.
         This method verifies if .midx files were superseded (e.g. all of its
         contents are in another, bigger .midx file) and removes the superseded
@@ -453,10 +453,9 @@ class PackIdxList:
                         add_error(e)
                         continue
                     d[full] = ix
-            if not skip_bloom:
-                bfull = os.path.join(self.dir, 'bup.bloom')
-                if self.bloom is None and os.path.exists(bfull):
-                    self.bloom = bloom.ShaBloom(bfull)
+            bfull = os.path.join(self.dir, 'bup.bloom')
+            if self.bloom is None and os.path.exists(bfull):
+                self.bloom = bloom.ShaBloom(bfull)
             self.packs = list(set(d.values()))
             self.packs.sort(lambda x,y: -cmp(len(x),len(y)))
             if self.bloom and self.bloom.valid() and len(self.bloom) >= len(self):
@@ -474,8 +473,8 @@ class PackIdxListPlus(PackIdxList):
     """ Variation on PackIdxList optimised for existing object retrieval"""
     max_recent = 10 # magic number of sorts; TODO optimise
 
-    def __init__(self, dir, skip_midx=False, skip_bloom=True):
-        PackIdxList.__init__(self, dir, skip_midx, skip_bloom)
+    def __init__(self, dir):
+        PackIdxList.__init__(self, dir)
         self.recent = []
 
     def find_obj(self, hash):
